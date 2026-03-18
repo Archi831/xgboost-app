@@ -225,3 +225,37 @@ with compare:
             st.plotly_chart(fig, key="compare_estimators")
     else:
         st.warning("Train the model to see comparisons.")
+
+with predict:
+    st.subheader("Make a Prediction")
+    st.write("Input feature values to predict the class label. Adjust the values for each feature based on the dataset's range.")
+    st.write("*Default values are set to the mean of each feature in the training set.*")
+    if 'bst' in st.session_state:
+        input_data = {}
+        grid = st.columns(3)
+        for i, feature in enumerate(X.columns):
+            min_val = float(X[feature].min())
+            max_val = float(X[feature].max())
+            mean_val = float(X[feature].mean())
+            input_data[feature] = grid[i % 3].number_input(feature, min_value=min_val, max_value=max_val, value=mean_val)
+
+        div = st.columns(2)
+        if div[0].button("Predict"):
+            input_df = pd.DataFrame([input_data])
+            st.session_state.prediction = st.session_state.bst.predict(input_df)[0]
+            st.session_state.predicted_class = dataset.target_names[st.session_state.prediction]
+            div[1].success(f"{st.session_state.predicted_class}")
+            st.session_state.probabilities = st.session_state.bst.predict_proba(pd.DataFrame([input_data]))[0]
+
+        if "probabilities" in st.session_state and "predicted_class" in st.session_state:
+            prob_df = pd.DataFrame({
+                "Class": dataset.target_names,
+                "Probability": st.session_state.probabilities
+            })
+            st.subheader("Prediction Probabilities")
+            prob_df["Predicted"] = prob_df["Class"] == st.session_state.predicted_class
+            fig = px.bar(prob_df, x="Class", y="Probability", color="Predicted")
+            st.plotly_chart(fig)
+    else:
+        st.warning("Train the model to make predictions.")
+                

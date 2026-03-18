@@ -1,0 +1,17 @@
+# Python virtual environments
+venv/
+.venv/
+
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local environment variables
+.env
+.env.*
+
+# IDE / OS noise
+.vscode/
+.DS_Store
+Thumbs.db

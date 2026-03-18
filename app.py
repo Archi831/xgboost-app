@@ -29,6 +29,20 @@ def load_dataset(name):
     df["target"] = dataset.target
     return (df, dataset)
 
+@st.cache_data
+def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_test, model_type="xgb"):
+    values = {}
+    for n in range(10, 210, 20):
+        if model_type == "xgb":
+            model = XGBClassifier(n_estimators=n, max_depth=max_depth, learning_rate=learning_rate, use_label_encoder=False, eval_metric="mlogloss")
+        else:
+            model = BaggingClassifier(n_estimators=n, random_state=42)
+        model.fit(X_train, y_train)
+        l = [model.score(X_test, y_test), f1_score(y_test, model.predict(X_test), average='macro')]
+        values[str(n)] = l
+    values_df = pd.DataFrame(values, index=["Accuracy", "F1-Score"]).T
+    return values_df
+
 # --- Global Sidebar ---
 
 selected_dataset = st.sidebar.selectbox(
@@ -133,19 +147,6 @@ with analysis:
         st.warning("Train the model to see the confusion matrix.")
     
     st.subheader("Performance vs n_estimators")
-    @st.cache_data
-    def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_test, model_type="xgb"):
-        values = {}
-        for n in range(10, 210, 20):
-            if model_type == "xgb":
-                model = XGBClassifier(n_estimators=n, max_depth=max_depth, learning_rate=learning_rate, use_label_encoder=False, eval_metric="mlogloss")
-            else:
-                model = BaggingClassifier(estimator=dt, n_estimators=n_estimators, random_state=42)
-            model.fit(X_train, y_train)
-            l = [model.score(X_test, y_test), f1_score(y_test, model.predict(X_test), average='macro')]
-            values[str(n)] = l
-        values_df = pd.DataFrame(values, index=["Accuracy", "F1-Score"]).T
-        return values_df
 
     if "bst" in st.session_state:
         with st.spinner("Training with different n_estimators..."):
@@ -255,7 +256,7 @@ with predict:
             st.subheader("Prediction Probabilities")
             prob_df["Predicted"] = prob_df["Class"] == st.session_state.predicted_class
             fig = px.bar(prob_df, x="Class", y="Probability", color="Predicted")
-            st.plotly_chart(fig)
+            st.plotly_chart(fig, key="prediction_probabilities")
     else:
         st.warning("Train the model to make predictions.")
                 

@@ -1,5 +1,7 @@
 import streamlit as st
 
+st.set_page_config(page_title="XGBoost Explorer", page_icon="🌲", layout="wide")
+
 import pandas as pd
 
 from xgboost import XGBClassifier
@@ -9,8 +11,28 @@ from sklearn.datasets import load_iris, load_wine, load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
 
-import plotly.express as px 
+import plotly.express as px
 import plotly.figure_factory as ff
+import plotly.graph_objects as go
+
+@st.cache_data
+def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_test, model_type="xgb"):
+    values = {}
+    for n in range(10, 310, 20):
+        if model_type == "xgb":
+            model = XGBClassifier(n_estimators=n, max_depth=max_depth, learning_rate=learning_rate, use_label_encoder=False, eval_metric="mlogloss")
+        else:
+            model = BaggingClassifier(n_estimators=n, random_state=42)
+        model.fit(X_train, y_train)
+        preds = model.predict(X_test)
+        values[str(n)] = [
+            model.score(X_test, y_test),
+            f1_score(y_test, preds, average='macro'),
+            precision_score(y_test, preds, average='macro'),
+            recall_score(y_test, preds, average='macro'),
+        ]
+    values_df = pd.DataFrame(values, index=["Accuracy", "F1-Score", "Precision", "Recall"]).T
+    return values_df
 
 @st.cache_data
 def load_dataset(name):
@@ -71,7 +93,113 @@ if st.sidebar.button("Train Model"):
 
 # --- Layout ---
 
+st.title("XGBoost Explorer")
+st.caption("An interactive app for exploring XGBoost and ensemble learning — train models, analyse performance, and compare against bagging classifiers.")
+
 theory, training, analysis, predict, compare = st.tabs(["Theory", "Training", "Analysis", "Predict", "Compare"])
+
+with theory:
+    st.title("XGBoost — Theory")
+    st.write("How XGBoost fits into the ensemble learning landscape, and what makes it work.")
+
+    st.divider()
+
+    st.subheader("1. The problem with weak classifiers")
+    st.markdown("""
+    A **weak classifier** is a model that performs only slightly better than random guessing — low Precision, Recall, F1, and Accuracy.
+    This is often caused by a small or low-quality training set, or by using a model that is too simple for the problem.
+    Ensemble methods address this by combining many weak classifiers into one strong classifier through voting (classification) or averaging (regression).
+    The key insight: a group of imperfect models that each make *different* mistakes can collectively outperform any single model.
+    """)
+
+    st.divider()
+
+    st.subheader("2. Boosting — the core idea")
+    st.markdown("""
+    Boosting trains classifiers **sequentially**. Each new model focuses on the examples the previous one got wrong
+    by increasing their weights in the training distribution. This is called **error-driven learning**.
+
+    The final prediction is a weighted vote across all M weak classifiers:
+    """)
+    st.latex(r"H(d, c) = \text{sign}\left(\sum_{m=1}^{M} \alpha_m \cdot H_m(d, c)\right)")
+    st.markdown("""
+    where $H_m$ is the m-th weak classifier and $\\alpha_m$ is its weight — proportional to its accuracy.
+    More accurate classifiers get a louder vote. This is the AdaBoost.MH formulation from Schapire & Singer (1999).
+
+    Unlike **bagging** (which trains classifiers in parallel on random subsets), boosting is **sequential** —
+    each model depends on the errors of the previous one, making it more powerful but also more sensitive to noisy data.
+    """)
+
+    st.divider()
+
+    st.subheader("3. From Boosting to Gradient Boosting")
+    st.markdown("""
+    AdaBoost reweights training samples to focus on misclassified examples.
+    **Gradient Boosting** generalizes this idea: instead of reweighting samples, each new tree is trained
+    to predict the **residual errors** (gradients of the loss function) of the current ensemble.
+
+    If the current ensemble predicts 0.7 for a sample whose true value is 1.0,
+    the next tree learns to predict the residual 0.3. The ensemble improves by adding corrective trees.
+    The learning rate $\\eta$ controls how much each tree contributes:
+    """)
+    st.latex(r"\hat{y}^{(m)} = \hat{y}^{(m-1)} + \eta \cdot h_m(x)")
+    st.markdown("A smaller $\\eta$ requires more trees but generalizes better — observable directly on the Analysis tab.")
+
+    st.divider()
+
+    st.subheader("4. XGBoost — what makes it different")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("""
+        **Regularization (L1 + L2)**
+        Standard Gradient Boosting has no penalty on tree weights. XGBoost adds L1 and L2 regularization
+        directly into the objective, reducing overfitting — especially on small datasets.
+
+        **Second-order gradients**
+        Standard GBM uses only the first derivative of the loss.
+        XGBoost also uses the second derivative (Hessian), giving a more accurate approximation
+        of the loss surface and faster convergence.
+        """)
+    with col2:
+        st.markdown("""
+        **Column subsampling**
+        Like Random Forests, XGBoost randomly selects a subset of features per tree.
+        This de-correlates the trees and reduces variance — the same principle from the Random Forests lecture.
+
+        **Parallel tree construction**
+        Trees are built using a parallelized split-finding algorithm,
+        making XGBoost significantly faster than naive GBM implementations
+        despite the sequential nature of boosting.
+        """)
+
+    st.divider()
+
+    st.subheader("5. Key hyperparameters")
+    st.markdown("The three parameters in the sidebar, and their effect:")
+    params = {
+        "Parameter": ["n_estimators", "max_depth", "learning_rate (η)"],
+        "Too low": ["Underfitting — ensemble too weak", "Underfitting — trees too shallow", "Slow convergence, needs many trees"],
+        "Too high": ["Overfitting + slow training", "Overfitting — trees memorize noise", "Overfitting — each tree overcorrects"],
+        "Typical range": ["100 – 500", "3 – 6", "0.01 – 0.3"],
+    }
+    st.dataframe(pd.DataFrame(params), hide_index=True, use_container_width=True)
+    st.markdown("""
+    A practical rule: **lower learning rate + more estimators** generally outperforms **high learning rate + fewer estimators**,
+    at the cost of training time. Verify this on the Analysis tab.
+    """)
+
+    st.divider()
+
+    st.subheader("6. When to use XGBoost")
+    st.markdown("""
+    XGBoost excels on **structured/tabular data** with numerical and categorical features,
+    especially for medium-sized datasets (thousands to hundreds of thousands of samples).
+    It is a strong default choice for most classification and regression tasks.
+
+    It is less suitable for **image, audio, or raw text** where deep learning has a structural advantage.
+    It can also struggle when training data is very small — boosting risks chasing noise,
+    as visible in the Breast Cancer results on the Compare tab.
+    """)
 
 with training:
     st.subheader(f"{selected_dataset} Dataset")
@@ -92,11 +220,24 @@ with training:
             recall = recall_score(st.session_state.y_test, y_pred, average='macro')
             f1 = f1_score(st.session_state.y_test, y_pred, average='macro')
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Accuracy", f"{acc:.4f}")
-        col2.metric("Precision", f"{precision:.4f}")
-        col3.metric("Recall", f"{recall:.4f}")
-        col4.metric("F1-Score", f"{f1:.4f}")
+        gauge_cols = st.columns(4)
+        for col, label, val in zip(gauge_cols, ["Accuracy", "Precision", "Recall", "F1-Score"], [acc, precision, recall, f1]):
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=float(val),
+                title={"text": label},
+                gauge={
+                    "axis": {"range": [0, 1]},
+                    "bar": {"color": "#636EFA"},
+                    "steps": [
+                        {"range": [0, 0.5], "color": "#f0f2f6"},
+                        {"range": [0.5, 0.75], "color": "#dde3f0"},
+                        {"range": [0.75, 1], "color": "#c9d3ea"},
+                    ],
+                },
+            ))
+            fig.update_layout(margin=dict(t=60, b=0, l=20, r=20), height=220)
+            col.plotly_chart(fig, use_container_width=True, key=f"gauge_{label}")
     else:
         st.warning("Train the model to see metrics.")
 
@@ -127,25 +268,12 @@ with analysis:
             colorscale="Blues",
             showscale=True
         )
-        fig.update_layout(title="", xaxis_title="Predicted", yaxis_title="Actual")
+        fig.update_layout(title="", xaxis_title="Predicted", yaxis_title="Actual", yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig, key="confusion")
     else:
         st.warning("Train the model to see the confusion matrix.")
     
     st.subheader("Performance vs n_estimators")
-    @st.cache_data
-    def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_test, model_type="xgb"):
-        values = {}
-        for n in range(10, 210, 20):
-            if model_type == "xgb":
-                model = XGBClassifier(n_estimators=n, max_depth=max_depth, learning_rate=learning_rate, use_label_encoder=False, eval_metric="mlogloss")
-            else:
-                model = BaggingClassifier(estimator=dt, n_estimators=n_estimators, random_state=42)
-            model.fit(X_train, y_train)
-            l = [model.score(X_test, y_test), f1_score(y_test, model.predict(X_test), average='macro')]
-            values[str(n)] = l
-        values_df = pd.DataFrame(values, index=["Accuracy", "F1-Score"]).T
-        return values_df
 
     if "bst" in st.session_state:
         with st.spinner("Training with different n_estimators..."):
@@ -173,20 +301,31 @@ with compare:
     if 'bst' in st.session_state:
         dt = DecisionTreeClassifier(max_depth=max_depth, random_state=42)
         dt.fit(st.session_state.X_train, st.session_state.y_train)
+        dt_preds = dt.predict(st.session_state.X_test)
         dt_acc = dt.score(st.session_state.X_test, st.session_state.y_test)
-        dt_f1 = f1_score(st.session_state.y_test, dt.predict(st.session_state.X_test), average='macro')
+        dt_f1 = f1_score(st.session_state.y_test, dt_preds, average='macro')
+        dt_prec = precision_score(st.session_state.y_test, dt_preds, average='macro')
+        dt_rec = recall_score(st.session_state.y_test, dt_preds, average='macro')
 
         bag = BaggingClassifier(estimator=dt, n_estimators=n_estimators, random_state=42)
         bag.fit(st.session_state.X_train, st.session_state.y_train)
+        bag_preds = bag.predict(st.session_state.X_test)
         bag_acc = bag.score(st.session_state.X_test, st.session_state.y_test)
-        bag_f1 = f1_score(st.session_state.y_test, bag.predict(st.session_state.X_test), average='macro')
+        bag_f1 = f1_score(st.session_state.y_test, bag_preds, average='macro')
+        bag_prec = precision_score(st.session_state.y_test, bag_preds, average='macro')
+        bag_rec = recall_score(st.session_state.y_test, bag_preds, average='macro')
 
+        xgb_preds = st.session_state.bst.predict(st.session_state.X_test)
         xgb_acc = st.session_state.bst.score(st.session_state.X_test, st.session_state.y_test)
-        xgb_f1 = f1_score(st.session_state.y_test, st.session_state.bst.predict(st.session_state.X_test), average='macro')
+        xgb_f1 = f1_score(st.session_state.y_test, xgb_preds, average='macro')
+        xgb_prec = precision_score(st.session_state.y_test, xgb_preds, average='macro')
+        xgb_rec = recall_score(st.session_state.y_test, xgb_preds, average='macro')
 
         comparison_df = pd.DataFrame({
             "Accuracy": [xgb_acc, dt_acc, bag_acc],
-            "F1-Score": [xgb_f1, dt_f1, bag_f1]
+            "F1-Score": [xgb_f1, dt_f1, bag_f1],
+            "Precision": [xgb_prec, dt_prec, bag_prec],
+            "Recall": [xgb_rec, dt_rec, bag_rec],
         })
         models_df = pd.DataFrame({
             "Model": ["XGBoost", "Decision Tree", "Bagging"]
@@ -214,15 +353,24 @@ with compare:
                 st.session_state.y_test,
                 model_type="bagging"
             )
-            values_df = pd.concat([xgb_values_df, bagging_values_df], keys=["XGBoost", "Bagging"], names=["Model", "n_estimators"])
-            values_df = values_df.reset_index()
-            fig = px.line(values_df, x="n_estimators", y=["Accuracy", "F1-Score"], markers=True, color="Model")
-            fig.update_layout(
-                title="", 
-                xaxis_title="n_estimators", 
-                yaxis_title="Score"
-                )
-            st.plotly_chart(fig, key="compare_estimators")
+            xgb_values_df = xgb_values_df.reset_index().rename(columns={"index": "n_estimators"})
+            bagging_values_df = bagging_values_df.reset_index().rename(columns={"index": "n_estimators"})
+            xgb_values_df["Model"] = "XGBoost"
+            bagging_values_df["Model"] = "Bagging"
+            combined = pd.concat([xgb_values_df, bagging_values_df], ignore_index=True)
+            long_df = combined.melt(id_vars=["n_estimators", "Model"], var_name="Metric", value_name="Score")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                df1 = long_df[long_df["Metric"].isin(["Accuracy", "F1-Score"])]
+                fig1 = px.line(df1, x="n_estimators", y="Score", color="Model", line_dash="Metric", markers=True)
+                fig1.update_layout(title="Accuracy & F1-Score", xaxis_title="n_estimators", yaxis_title="Score", legend_title="")
+                st.plotly_chart(fig1, key="compare_acc_f1")
+            with col2:
+                df2 = long_df[long_df["Metric"].isin(["Precision", "Recall"])]
+                fig2 = px.line(df2, x="n_estimators", y="Score", color="Model", line_dash="Metric", markers=True)
+                fig2.update_layout(title="Precision & Recall", xaxis_title="n_estimators", yaxis_title="Score", legend_title="")
+                st.plotly_chart(fig2, key="compare_prec_rec")
     else:
         st.warning("Train the model to see comparisons.")
 
@@ -255,7 +403,7 @@ with predict:
             st.subheader("Prediction Probabilities")
             prob_df["Predicted"] = prob_df["Class"] == st.session_state.predicted_class
             fig = px.bar(prob_df, x="Class", y="Probability", color="Predicted")
-            st.plotly_chart(fig)
+            st.plotly_chart(fig, key="prediction_probabilities")
     else:
         st.warning("Train the model to make predictions.")
                 

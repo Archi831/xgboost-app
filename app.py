@@ -13,6 +13,19 @@ import plotly.express as px
 import plotly.figure_factory as ff
 
 @st.cache_data
+def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_test, model_type="xgb"):
+    values = {}
+    for n in range(10, 310, 20):
+        if model_type == "xgb":
+            model = XGBClassifier(n_estimators=n, max_depth=max_depth, learning_rate=learning_rate, use_label_encoder=False, eval_metric="mlogloss")
+        else:
+            model = BaggingClassifier(n_estimators=n, random_state=42)
+        model.fit(X_train, y_train)
+        values[str(n)] = [model.score(X_test, y_test), f1_score(y_test, model.predict(X_test), average='macro')]
+    values_df = pd.DataFrame(values, index=["Accuracy", "F1-Score"]).T
+    return values_df
+
+@st.cache_data
 def load_dataset(name):
     """Loads dataset and returns a formatted DataFrame."""
     # Map the selectbox strings directly to the sklearn functions
@@ -28,20 +41,6 @@ def load_dataset(name):
     df = pd.DataFrame(dataset.data, columns=dataset.feature_names)
     df["target"] = dataset.target
     return (df, dataset)
-
-@st.cache_data
-def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_test, model_type="xgb"):
-    values = {}
-    for n in range(10, 210, 20):
-        if model_type == "xgb":
-            model = XGBClassifier(n_estimators=n, max_depth=max_depth, learning_rate=learning_rate, use_label_encoder=False, eval_metric="mlogloss")
-        else:
-            model = BaggingClassifier(n_estimators=n, random_state=42)
-        model.fit(X_train, y_train)
-        l = [model.score(X_test, y_test), f1_score(y_test, model.predict(X_test), average='macro')]
-        values[str(n)] = l
-    values_df = pd.DataFrame(values, index=["Accuracy", "F1-Score"]).T
-    return values_df
 
 # --- Global Sidebar ---
 
@@ -86,6 +85,109 @@ if st.sidebar.button("Train Model"):
 # --- Layout ---
 
 theory, training, analysis, predict, compare = st.tabs(["Theory", "Training", "Analysis", "Predict", "Compare"])
+
+with theory:
+    st.title("XGBoost — Theory")
+    st.write("How XGBoost fits into the ensemble learning landscape, and what makes it work.")
+
+    st.divider()
+
+    st.subheader("1. The problem with weak classifiers")
+    st.markdown("""
+    A **weak classifier** is a model that performs only slightly better than random guessing — low Precision, Recall, F1, and Accuracy.
+    This is often caused by a small or low-quality training set, or by using a model that is too simple for the problem.
+    Ensemble methods address this by combining many weak classifiers into one strong classifier through voting (classification) or averaging (regression).
+    The key insight: a group of imperfect models that each make *different* mistakes can collectively outperform any single model.
+    """)
+
+    st.divider()
+
+    st.subheader("2. Boosting — the core idea")
+    st.markdown("""
+    Boosting trains classifiers **sequentially**. Each new model focuses on the examples the previous one got wrong
+    by increasing their weights in the training distribution. This is called **error-driven learning**.
+
+    The final prediction is a weighted vote across all M weak classifiers:
+    """)
+    st.latex(r"H(d, c) = \text{sign}\left(\sum_{m=1}^{M} \alpha_m \cdot H_m(d, c)\right)")
+    st.markdown("""
+    where $H_m$ is the m-th weak classifier and $\\alpha_m$ is its weight — proportional to its accuracy.
+    More accurate classifiers get a louder vote. This is the AdaBoost.MH formulation from Schapire & Singer (1999).
+
+    Unlike **bagging** (which trains classifiers in parallel on random subsets), boosting is **sequential** —
+    each model depends on the errors of the previous one, making it more powerful but also more sensitive to noisy data.
+    """)
+
+    st.divider()
+
+    st.subheader("3. From Boosting to Gradient Boosting")
+    st.markdown("""
+    AdaBoost reweights training samples to focus on misclassified examples.
+    **Gradient Boosting** generalizes this idea: instead of reweighting samples, each new tree is trained
+    to predict the **residual errors** (gradients of the loss function) of the current ensemble.
+
+    If the current ensemble predicts 0.7 for a sample whose true value is 1.0,
+    the next tree learns to predict the residual 0.3. The ensemble improves by adding corrective trees.
+    The learning rate $\\eta$ controls how much each tree contributes:
+    """)
+    st.latex(r"\hat{y}^{(m)} = \hat{y}^{(m-1)} + \eta \cdot h_m(x)")
+    st.markdown("A smaller $\\eta$ requires more trees but generalizes better — observable directly on the Analysis tab.")
+
+    st.divider()
+
+    st.subheader("4. XGBoost — what makes it different")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("""
+        **Regularization (L1 + L2)**
+        Standard Gradient Boosting has no penalty on tree weights. XGBoost adds L1 and L2 regularization
+        directly into the objective, reducing overfitting — especially on small datasets.
+
+        **Second-order gradients**
+        Standard GBM uses only the first derivative of the loss.
+        XGBoost also uses the second derivative (Hessian), giving a more accurate approximation
+        of the loss surface and faster convergence.
+        """)
+    with col2:
+        st.markdown("""
+        **Column subsampling**
+        Like Random Forests, XGBoost randomly selects a subset of features per tree.
+        This de-correlates the trees and reduces variance — the same principle from the Random Forests lecture.
+
+        **Parallel tree construction**
+        Trees are built using a parallelized split-finding algorithm,
+        making XGBoost significantly faster than naive GBM implementations
+        despite the sequential nature of boosting.
+        """)
+
+    st.divider()
+
+    st.subheader("5. Key hyperparameters")
+    st.markdown("The three parameters in the sidebar, and their effect:")
+    params = {
+        "Parameter": ["n_estimators", "max_depth", "learning_rate (η)"],
+        "Too low": ["Underfitting — ensemble too weak", "Underfitting — trees too shallow", "Slow convergence, needs many trees"],
+        "Too high": ["Overfitting + slow training", "Overfitting — trees memorize noise", "Overfitting — each tree overcorrects"],
+        "Typical range": ["100 – 500", "3 – 6", "0.01 – 0.3"],
+    }
+    st.dataframe(pd.DataFrame(params), hide_index=True, use_container_width=True)
+    st.markdown("""
+    A practical rule: **lower learning rate + more estimators** generally outperforms **high learning rate + fewer estimators**,
+    at the cost of training time. Verify this on the Analysis tab.
+    """)
+
+    st.divider()
+
+    st.subheader("6. When to use XGBoost")
+    st.markdown("""
+    XGBoost excels on **structured/tabular data** with numerical and categorical features,
+    especially for medium-sized datasets (thousands to hundreds of thousands of samples).
+    It is a strong default choice for most classification and regression tasks.
+
+    It is less suitable for **image, audio, or raw text** where deep learning has a structural advantage.
+    It can also struggle when training data is very small — boosting risks chasing noise,
+    as visible in the Breast Cancer results on the Compare tab.
+    """)
 
 with training:
     st.subheader(f"{selected_dataset} Dataset")
@@ -141,7 +243,7 @@ with analysis:
             colorscale="Blues",
             showscale=True
         )
-        fig.update_layout(title="", xaxis_title="Predicted", yaxis_title="Actual")
+        fig.update_layout(title="", xaxis_title="Predicted", yaxis_title="Actual", yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig, key="confusion")
     else:
         st.warning("Train the model to see the confusion matrix.")

@@ -18,8 +18,13 @@ Main features:
 - Hyperparameter tuning (`n_estimators`, `max_depth`, `learning_rate`)
 - Adjustable train/test split
 - Model training with one click
-- Evaluation metrics: Accuracy, Precision, Recall, F1
-- Visual analysis: Feature Importance and Confusion Matrix
+
+Tabs:
+- **Theory** — ensemble learning background, AdaBoost formulation, Gradient Boosting, XGBoost specifics, hyperparameter guide
+- **Training** — dataset preview, evaluation metrics (Accuracy, Precision, Recall, F1-Score)
+- **Analysis** — Feature Importance bar chart, Confusion Matrix, Performance vs `n_estimators` line chart
+- **Predict** — per-feature number inputs (bounded by dataset min/max, defaulting to mean), predicted class label and probability bar chart
+- **Compare** — side-by-side Accuracy and F1 table for XGBoost, Decision Tree, and Bagging; Accuracy/F1 vs `n_estimators` line chart for XGBoost vs Bagging
 
 ## Tech Stack
 
@@ -73,5 +78,6 @@ Then open the local URL shown in terminal (usually `http://localhost:8501`).
 
 ## Notes
 
-- The app currently focuses on training and analysis workflows.
-- Tabs `Theory`, `Predict`, and `Compare` are present in UI and can be expanded with additional content.
+- Switching datasets resets the trained model — retrain after changing the dataset selection.
+- The Performance vs n_estimators and Compare charts iterate `n_estimators` from 10 to 300 in steps of 20; results are cached via `@st.cache_data` so re-renders are instant.
+- All metrics use macro averaging to handle multi-class datasets uniformly.

@@ -57,12 +57,14 @@ y = df["target"]
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=(100 - tt_split) / 100, random_state=42
 )
+st.session_state.X_train = X_train
+st.session_state.y_train = y_train
+st.session_state.X_test = X_test
+st.session_state.y_test = y_test
 
 if st.sidebar.button("Train Model"):
     st.session_state.bst = XGBClassifier(n_estimators=n_estimators, max_depth=max_depth, learning_rate=learning_rate, use_label_encoder=False, eval_metric="mlogloss")
     st.session_state.bst.fit(X_train, y_train)
-    st.session_state.X_test = X_test
-    st.session_state.y_test = y_test    
     st.success("Model trained successfully!")
 
 # --- Layout ---
@@ -125,3 +127,38 @@ with analysis:
         )
         fig.update_layout(title="", xaxis_title="Predicted", yaxis_title="Actual")
         st.plotly_chart(fig)
+    else:
+        st.warning("Train the model to see the confusion matrix.")
+    
+    st.subheader("Performance vs n_estimators")
+    @st.cache_data
+    def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_test):
+        values = {}
+        for n in range(10, 300, 10):
+            model = XGBClassifier(n_estimators=n, max_depth=max_depth, learning_rate=learning_rate, use_label_encoder=False, eval_metric="mlogloss")
+            model.fit(X_train, y_train)
+            l = [model.score(X_test, y_test), f1_score(y_test, model.predict(X_test), average='macro')]
+            values[str(n)] = l
+        values_df = pd.DataFrame(values, index=["Accuracy", "F1-Score"]).T
+        return values_df
+
+    if "bst" in st.session_state:
+        with st.spinner("Training with different n_estimators..."):
+            values_df = train_with_estimators(
+                max_depth, learning_rate,
+                st.session_state.X_train,
+                st.session_state.y_train,
+                st.session_state.X_test,
+                st.session_state.y_test
+            )
+            fig = px.line(values_df, x=values_df.index, y=["Accuracy", "F1-Score"], markers=True)
+            fig.update_layout(
+                title="", 
+                xaxis_title="n_estimators", 
+                yaxis_title="Score", 
+                yaxis=dict(autorange="reversed")
+                )
+            st.plotly_chart(fig)
+    else:
+        st.warning("Train the model to see performance comparison.")
+                

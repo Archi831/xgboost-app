@@ -3,6 +3,8 @@ import streamlit as st
 import pandas as pd
 
 from xgboost import XGBClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import BaggingClassifier
 from sklearn.datasets import load_iris, load_wine, load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
@@ -109,7 +111,7 @@ with analysis:
         }).sort_values(by="Importance", ascending=False)
 
         fig = px.bar(importance_df, x="Feature", y="Importance", title="")
-        st.plotly_chart(fig)
+        st.plotly_chart(fig, key="feature_importance")
     else:
         st.warning("Train the model to see feature importance.")
 
@@ -126,16 +128,19 @@ with analysis:
             showscale=True
         )
         fig.update_layout(title="", xaxis_title="Predicted", yaxis_title="Actual")
-        st.plotly_chart(fig)
+        st.plotly_chart(fig, key="confusion")
     else:
         st.warning("Train the model to see the confusion matrix.")
     
     st.subheader("Performance vs n_estimators")
     @st.cache_data
-    def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_test):
+    def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_test, model_type="xgb"):
         values = {}
-        for n in range(10, 300, 10):
-            model = XGBClassifier(n_estimators=n, max_depth=max_depth, learning_rate=learning_rate, use_label_encoder=False, eval_metric="mlogloss")
+        for n in range(10, 210, 20):
+            if model_type == "xgb":
+                model = XGBClassifier(n_estimators=n, max_depth=max_depth, learning_rate=learning_rate, use_label_encoder=False, eval_metric="mlogloss")
+            else:
+                model = BaggingClassifier(estimator=dt, n_estimators=n_estimators, random_state=42)
             model.fit(X_train, y_train)
             l = [model.score(X_test, y_test), f1_score(y_test, model.predict(X_test), average='macro')]
             values[str(n)] = l
@@ -149,16 +154,74 @@ with analysis:
                 st.session_state.X_train,
                 st.session_state.y_train,
                 st.session_state.X_test,
-                st.session_state.y_test
+                st.session_state.y_test,
+                model_type="xgb"
             )
             fig = px.line(values_df, x=values_df.index, y=["Accuracy", "F1-Score"], markers=True)
             fig.update_layout(
                 title="", 
                 xaxis_title="n_estimators", 
                 yaxis_title="Score", 
-                yaxis=dict(autorange="reversed")
                 )
-            st.plotly_chart(fig)
+            st.plotly_chart(fig, key="performance_n_estimators")
     else:
         st.warning("Train the model to see performance comparison.")
-                
+            
+
+with compare:
+    st.subheader("Compare with other models")
+    if 'bst' in st.session_state:
+        dt = DecisionTreeClassifier(max_depth=max_depth, random_state=42)
+        dt.fit(st.session_state.X_train, st.session_state.y_train)
+        dt_acc = dt.score(st.session_state.X_test, st.session_state.y_test)
+        dt_f1 = f1_score(st.session_state.y_test, dt.predict(st.session_state.X_test), average='macro')
+
+        bag = BaggingClassifier(estimator=dt, n_estimators=n_estimators, random_state=42)
+        bag.fit(st.session_state.X_train, st.session_state.y_train)
+        bag_acc = bag.score(st.session_state.X_test, st.session_state.y_test)
+        bag_f1 = f1_score(st.session_state.y_test, bag.predict(st.session_state.X_test), average='macro')
+
+        xgb_acc = st.session_state.bst.score(st.session_state.X_test, st.session_state.y_test)
+        xgb_f1 = f1_score(st.session_state.y_test, st.session_state.bst.predict(st.session_state.X_test), average='macro')
+
+        comparison_df = pd.DataFrame({
+            "Accuracy": [xgb_acc, dt_acc, bag_acc],
+            "F1-Score": [xgb_f1, dt_f1, bag_f1]
+        })
+        models_df = pd.DataFrame({
+            "Model": ["XGBoost", "Decision Tree", "Bagging"]
+        })
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.dataframe(models_df, hide_index=True, use_container_width=True)
+        with col2:
+            st.dataframe(comparison_df.style.highlight_max(axis=0), hide_index=True, use_container_width=True)
+
+        with st.spinner("Training with different estimators..."):
+            xgb_values_df = train_with_estimators(
+                max_depth, learning_rate,
+                st.session_state.X_train,
+                st.session_state.y_train,
+                st.session_state.X_test,
+                st.session_state.y_test,
+                model_type="xgb"
+            )
+            bagging_values_df = train_with_estimators(
+                max_depth, learning_rate,
+                st.session_state.X_train,
+                st.session_state.y_train,
+                st.session_state.X_test,
+                st.session_state.y_test,
+                model_type="bagging"
+            )
+            values_df = pd.concat([xgb_values_df, bagging_values_df], keys=["XGBoost", "Bagging"], names=["Model", "n_estimators"])
+            values_df = values_df.reset_index()
+            fig = px.line(values_df, x="n_estimators", y=["Accuracy", "F1-Score"], markers=True, color="Model")
+            fig.update_layout(
+                title="", 
+                xaxis_title="n_estimators", 
+                yaxis_title="Score"
+                )
+            st.plotly_chart(fig, key="compare_estimators")
+    else:
+        st.warning("Train the model to see comparisons.")

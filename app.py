@@ -1,5 +1,7 @@
 import streamlit as st
 
+st.set_page_config(page_title="XGBoost Explorer", page_icon="🌲", layout="wide")
+
 import pandas as pd
 
 from xgboost import XGBClassifier
@@ -9,8 +11,9 @@ from sklearn.datasets import load_iris, load_wine, load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
 
-import plotly.express as px 
+import plotly.express as px
 import plotly.figure_factory as ff
+import plotly.graph_objects as go
 
 @st.cache_data
 def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_test, model_type="xgb"):
@@ -21,8 +24,14 @@ def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_
         else:
             model = BaggingClassifier(n_estimators=n, random_state=42)
         model.fit(X_train, y_train)
-        values[str(n)] = [model.score(X_test, y_test), f1_score(y_test, model.predict(X_test), average='macro')]
-    values_df = pd.DataFrame(values, index=["Accuracy", "F1-Score"]).T
+        preds = model.predict(X_test)
+        values[str(n)] = [
+            model.score(X_test, y_test),
+            f1_score(y_test, preds, average='macro'),
+            precision_score(y_test, preds, average='macro'),
+            recall_score(y_test, preds, average='macro'),
+        ]
+    values_df = pd.DataFrame(values, index=["Accuracy", "F1-Score", "Precision", "Recall"]).T
     return values_df
 
 @st.cache_data
@@ -83,6 +92,9 @@ if st.sidebar.button("Train Model"):
     st.success("Model trained successfully!")
 
 # --- Layout ---
+
+st.title("XGBoost Explorer")
+st.caption("An interactive app for exploring XGBoost and ensemble learning — train models, analyse performance, and compare against bagging classifiers.")
 
 theory, training, analysis, predict, compare = st.tabs(["Theory", "Training", "Analysis", "Predict", "Compare"])
 
@@ -208,11 +220,24 @@ with training:
             recall = recall_score(st.session_state.y_test, y_pred, average='macro')
             f1 = f1_score(st.session_state.y_test, y_pred, average='macro')
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Accuracy", f"{acc:.4f}")
-        col2.metric("Precision", f"{precision:.4f}")
-        col3.metric("Recall", f"{recall:.4f}")
-        col4.metric("F1-Score", f"{f1:.4f}")
+        gauge_cols = st.columns(4)
+        for col, label, val in zip(gauge_cols, ["Accuracy", "Precision", "Recall", "F1-Score"], [acc, precision, recall, f1]):
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=float(val),
+                title={"text": label},
+                gauge={
+                    "axis": {"range": [0, 1]},
+                    "bar": {"color": "#636EFA"},
+                    "steps": [
+                        {"range": [0, 0.5], "color": "#f0f2f6"},
+                        {"range": [0.5, 0.75], "color": "#dde3f0"},
+                        {"range": [0.75, 1], "color": "#c9d3ea"},
+                    ],
+                },
+            ))
+            fig.update_layout(margin=dict(t=60, b=0, l=20, r=20), height=220)
+            col.plotly_chart(fig, use_container_width=True, key=f"gauge_{label}")
     else:
         st.warning("Train the model to see metrics.")
 
@@ -276,20 +301,31 @@ with compare:
     if 'bst' in st.session_state:
         dt = DecisionTreeClassifier(max_depth=max_depth, random_state=42)
         dt.fit(st.session_state.X_train, st.session_state.y_train)
+        dt_preds = dt.predict(st.session_state.X_test)
         dt_acc = dt.score(st.session_state.X_test, st.session_state.y_test)
-        dt_f1 = f1_score(st.session_state.y_test, dt.predict(st.session_state.X_test), average='macro')
+        dt_f1 = f1_score(st.session_state.y_test, dt_preds, average='macro')
+        dt_prec = precision_score(st.session_state.y_test, dt_preds, average='macro')
+        dt_rec = recall_score(st.session_state.y_test, dt_preds, average='macro')
 
         bag = BaggingClassifier(estimator=dt, n_estimators=n_estimators, random_state=42)
         bag.fit(st.session_state.X_train, st.session_state.y_train)
+        bag_preds = bag.predict(st.session_state.X_test)
         bag_acc = bag.score(st.session_state.X_test, st.session_state.y_test)
-        bag_f1 = f1_score(st.session_state.y_test, bag.predict(st.session_state.X_test), average='macro')
+        bag_f1 = f1_score(st.session_state.y_test, bag_preds, average='macro')
+        bag_prec = precision_score(st.session_state.y_test, bag_preds, average='macro')
+        bag_rec = recall_score(st.session_state.y_test, bag_preds, average='macro')
 
+        xgb_preds = st.session_state.bst.predict(st.session_state.X_test)
         xgb_acc = st.session_state.bst.score(st.session_state.X_test, st.session_state.y_test)
-        xgb_f1 = f1_score(st.session_state.y_test, st.session_state.bst.predict(st.session_state.X_test), average='macro')
+        xgb_f1 = f1_score(st.session_state.y_test, xgb_preds, average='macro')
+        xgb_prec = precision_score(st.session_state.y_test, xgb_preds, average='macro')
+        xgb_rec = recall_score(st.session_state.y_test, xgb_preds, average='macro')
 
         comparison_df = pd.DataFrame({
             "Accuracy": [xgb_acc, dt_acc, bag_acc],
-            "F1-Score": [xgb_f1, dt_f1, bag_f1]
+            "F1-Score": [xgb_f1, dt_f1, bag_f1],
+            "Precision": [xgb_prec, dt_prec, bag_prec],
+            "Recall": [xgb_rec, dt_rec, bag_rec],
         })
         models_df = pd.DataFrame({
             "Model": ["XGBoost", "Decision Tree", "Bagging"]
@@ -317,15 +353,24 @@ with compare:
                 st.session_state.y_test,
                 model_type="bagging"
             )
-            values_df = pd.concat([xgb_values_df, bagging_values_df], keys=["XGBoost", "Bagging"], names=["Model", "n_estimators"])
-            values_df = values_df.reset_index()
-            fig = px.line(values_df, x="n_estimators", y=["Accuracy", "F1-Score"], markers=True, color="Model")
-            fig.update_layout(
-                title="", 
-                xaxis_title="n_estimators", 
-                yaxis_title="Score"
-                )
-            st.plotly_chart(fig, key="compare_estimators")
+            xgb_values_df = xgb_values_df.reset_index().rename(columns={"index": "n_estimators"})
+            bagging_values_df = bagging_values_df.reset_index().rename(columns={"index": "n_estimators"})
+            xgb_values_df["Model"] = "XGBoost"
+            bagging_values_df["Model"] = "Bagging"
+            combined = pd.concat([xgb_values_df, bagging_values_df], ignore_index=True)
+            long_df = combined.melt(id_vars=["n_estimators", "Model"], var_name="Metric", value_name="Score")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                df1 = long_df[long_df["Metric"].isin(["Accuracy", "F1-Score"])]
+                fig1 = px.line(df1, x="n_estimators", y="Score", color="Model", line_dash="Metric", markers=True)
+                fig1.update_layout(title="Accuracy & F1-Score", xaxis_title="n_estimators", yaxis_title="Score", legend_title="")
+                st.plotly_chart(fig1, key="compare_acc_f1")
+            with col2:
+                df2 = long_df[long_df["Metric"].isin(["Precision", "Recall"])]
+                fig2 = px.line(df2, x="n_estimators", y="Score", color="Model", line_dash="Metric", markers=True)
+                fig2.update_layout(title="Precision & Recall", xaxis_title="n_estimators", yaxis_title="Score", legend_title="")
+                st.plotly_chart(fig2, key="compare_prec_rec")
     else:
         st.warning("Train the model to see comparisons.")
 

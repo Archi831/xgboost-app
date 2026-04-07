@@ -12,6 +12,7 @@ Available datasets:
 - Iris
 - Wine
 - Breast Cancer
+- Digits
 
 Main features:
 - Dataset selection from sidebar
@@ -25,6 +26,85 @@ Tabs:
 - **Analysis** — Feature Importance bar chart, Confusion Matrix, Performance vs `n_estimators` line chart
 - **Predict** — per-feature number inputs (bounded by dataset min/max, defaulting to mean), predicted class label and probability bar chart
 - **Compare** — side-by-side Accuracy and F1 table for XGBoost, Decision Tree, and Bagging; Accuracy/F1 vs `n_estimators` line chart for XGBoost vs Bagging
+
+## Theory
+
+### 1. The problem with weak classifiers
+
+A **weak classifier** is a model that performs only slightly better than random guessing — low Precision, Recall, F1, and Accuracy.
+This is often caused by a small or low-quality training set, or by using a model that is too simple for the problem.
+Ensemble methods address this by combining many weak classifiers into one strong classifier through voting (classification) or averaging (regression).
+The key insight: a group of imperfect models that each make *different* mistakes can collectively outperform any single model.
+
+---
+
+### 2. Boosting — the core idea
+
+Boosting trains classifiers **sequentially**. Each new model focuses on the examples the previous one got wrong
+by increasing their weights in the training distribution. This is called **error-driven learning**.
+
+The final prediction is a weighted vote across all M weak classifiers:
+
+$$H(d, c) = \text{sign}\left(\sum_{m=1}^{M} \alpha_m \cdot H_m(d, c)\right)$$
+
+where $H_m$ is the m-th weak classifier and $\alpha_m$ is its weight — proportional to its accuracy.
+More accurate classifiers get a louder vote. This is the AdaBoost.MH formulation from Schapire & Singer (1999).
+
+Unlike **bagging** (which trains classifiers in parallel on random subsets), boosting is **sequential** —
+each model depends on the errors of the previous one, making it more powerful but also more sensitive to noisy data.
+
+---
+
+### 3. From Boosting to Gradient Boosting
+
+AdaBoost reweights training samples to focus on misclassified examples.
+**Gradient Boosting** generalizes this idea: instead of reweighting samples, each new tree is trained
+to predict the **residual errors** (gradients of the loss function) of the current ensemble.
+
+If the current ensemble predicts 0.7 for a sample whose true value is 1.0,
+the next tree learns to predict the residual 0.3. The ensemble improves by adding corrective trees.
+The learning rate $\eta$ controls how much each tree contributes:
+
+$$\hat{y}^{(m)} = \hat{y}^{(m-1)} + \eta \cdot h_m(x)$$
+
+A smaller $\eta$ requires more trees but generalizes better.
+
+---
+
+### 4. XGBoost — what makes it different
+
+| Feature | Description |
+|---|---|
+| **Regularization (L1 + L2)** | Standard Gradient Boosting has no penalty on tree weights. XGBoost adds L1 and L2 regularization directly into the objective, reducing overfitting — especially on small datasets. |
+| **Second-order gradients** | Standard GBM uses only the first derivative of the loss. XGBoost also uses the second derivative (Hessian), giving a more accurate approximation of the loss surface and faster convergence. |
+| **Column subsampling** | Like Random Forests, XGBoost randomly selects a subset of features per tree. This de-correlates the trees and reduces variance. |
+| **Parallel tree construction** | Trees are built using a parallelized split-finding algorithm, making XGBoost significantly faster than naive GBM implementations despite the sequential nature of boosting. |
+
+---
+
+### 5. Key hyperparameters
+
+| Parameter | Too low | Too high | Typical range |
+|---|---|---|---|
+| `n_estimators` | Underfitting — ensemble too weak | Overfitting + slow training | 100 – 500 |
+| `max_depth` | Underfitting — trees too shallow | Overfitting — trees memorize noise | 3 – 6 |
+| `learning_rate` (η) | Slow convergence, needs many trees | Overfitting — each tree overcorrects | 0.01 – 0.3 |
+
+A practical rule: **lower learning rate + more estimators** generally outperforms **high learning rate + fewer estimators**, at the cost of training time.
+
+---
+
+### 6. When to use XGBoost
+
+XGBoost excels on **structured/tabular data** with numerical and categorical features,
+especially for medium-sized datasets (thousands to hundreds of thousands of samples).
+It is a strong default choice for most classification and regression tasks.
+
+It is less suitable for **image, audio, or raw text** where deep learning has a structural advantage.
+It can also struggle when training data is very small — boosting risks chasing noise,
+as visible in the Breast Cancer results on the Compare tab.
+
+---
 
 ## Tech Stack
 

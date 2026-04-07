@@ -7,7 +7,7 @@ import pandas as pd
 from xgboost import XGBClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import BaggingClassifier
-from sklearn.datasets import load_iris, load_wine, load_breast_cancer
+from sklearn.datasets import load_iris, load_wine, load_breast_cancer, load_digits
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
 
@@ -41,7 +41,8 @@ def load_dataset(name):
     loaders = {
         "Iris": load_iris,
         "Wine": load_wine,
-        "Breast Cancer": load_breast_cancer
+        "Breast Cancer": load_breast_cancer,
+        "Digits": load_digits,
     }
     
     # Execute the mapped function
@@ -54,17 +55,18 @@ def load_dataset(name):
 # --- Global Sidebar ---
 
 selected_dataset = st.sidebar.selectbox(
-    "Select dataset", 
-    ["Iris", "Wine", "Breast Cancer"]
+    "Select dataset",
+    ["Iris", "Wine", "Breast Cancer", "Digits"]
 )
 
 if "last_dataset" not in st.session_state:
     st.session_state.last_dataset = selected_dataset
 
 if st.session_state.last_dataset != selected_dataset:
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
     st.session_state.last_dataset = selected_dataset
-    if "bst" in st.session_state:
-        del st.session_state.bst
+    st.cache_data.clear()
 
 df, dataset = load_dataset(selected_dataset)
 
@@ -236,8 +238,8 @@ with training:
                     ],
                 },
             ))
-            fig.update_layout(margin=dict(t=60, b=0, l=20, r=20), height=220)
-            col.plotly_chart(fig, use_container_width=True, key=f"gauge_{label}")
+            fig.update_layout(margin=dict(t=60, b=0, l=20, r=20), height=220, width=220)
+            col.plotly_chart(fig, key=f"gauge_{label}")
     else:
         st.warning("Train the model to see metrics.")
 
@@ -376,34 +378,68 @@ with compare:
 
 with predict:
     st.subheader("Make a Prediction")
-    st.write("Input feature values to predict the class label. Adjust the values for each feature based on the dataset's range.")
-    st.write("*Default values are set to the mean of each feature in the training set.*")
     if 'bst' in st.session_state:
-        input_data = {}
-        grid = st.columns(3)
-        for i, feature in enumerate(X.columns):
-            min_val = float(X[feature].min())
-            max_val = float(X[feature].max())
-            mean_val = float(X[feature].mean())
-            input_data[feature] = grid[i % 3].number_input(feature, min_value=min_val, max_value=max_val, value=mean_val)
+        if selected_dataset == "Digits":
+            st.write("Select a sample from the test set to predict.")
+            n_show = 10
+            cols = st.columns(n_show)
+            for i in range(n_show):
+                img = st.session_state.X_test.iloc[i].values.reshape(8, 8)
+                fig = px.imshow(img, color_continuous_scale="gray_r")
+                fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=90, coloraxis_showscale=False)
+                fig.update_xaxes(visible=False)
+                fig.update_yaxes(visible=False)
+                with cols[i]:
+                    st.plotly_chart(fig, use_container_width=True, key=f"digit_preview_{i}")
+                    if st.button("Select", key=f"digit_select_{i}", use_container_width=True):
+                        input_df = st.session_state.X_test.iloc[[i]]
+                        st.session_state.prediction = int(st.session_state.bst.predict(input_df)[0])
+                        st.session_state.predicted_class = str(dataset.target_names[st.session_state.prediction])
+                        st.session_state.probabilities = st.session_state.bst.predict_proba(input_df)[0]
+                        st.session_state.true_label = str(st.session_state.y_test.iloc[i])
 
-        div = st.columns(2)
-        if div[0].button("Predict"):
-            input_df = pd.DataFrame([input_data])
-            st.session_state.prediction = st.session_state.bst.predict(input_df)[0]
-            st.session_state.predicted_class = dataset.target_names[st.session_state.prediction]
-            div[1].success(f"{st.session_state.predicted_class}")
-            st.session_state.probabilities = st.session_state.bst.predict_proba(pd.DataFrame([input_data]))[0]
+            if "probabilities" in st.session_state and "predicted_class" in st.session_state:
+                st.divider()
+                res_cols = st.columns(2)
+                res_cols[0].metric("Predicted", st.session_state.predicted_class)
+                if "true_label" in st.session_state:
+                    res_cols[1].metric("True Label", st.session_state.true_label)
+                prob_df = pd.DataFrame({
+                    "Class": [str(c) for c in dataset.target_names],
+                    "Probability": st.session_state.probabilities
+                })
+                prob_df["Predicted"] = prob_df["Class"] == st.session_state.predicted_class
+                st.subheader("Prediction Probabilities")
+                fig = px.bar(prob_df, x="Class", y="Probability", color="Predicted")
+                st.plotly_chart(fig, key="prediction_probabilities")
+        else:
+            st.write("Input feature values to predict the class label. Adjust the values for each feature based on the dataset's range.")
+            st.write("*Default values are set to the mean of each feature in the training set.*")
+            input_data = {}
+            grid = st.columns(3)
+            for i, feature in enumerate(X.columns):
+                min_val = float(X[feature].min())
+                max_val = float(X[feature].max())
+                mean_val = float(X[feature].mean())
+                input_data[feature] = grid[i % 3].number_input(feature, min_value=min_val, max_value=max_val, value=mean_val)
 
-        if "probabilities" in st.session_state and "predicted_class" in st.session_state:
-            prob_df = pd.DataFrame({
-                "Class": dataset.target_names,
-                "Probability": st.session_state.probabilities
-            })
-            st.subheader("Prediction Probabilities")
-            prob_df["Predicted"] = prob_df["Class"] == st.session_state.predicted_class
-            fig = px.bar(prob_df, x="Class", y="Probability", color="Predicted")
-            st.plotly_chart(fig, key="prediction_probabilities")
+            div = st.columns(2)
+            if div[0].button("Predict"):
+                input_df = pd.DataFrame([input_data])
+                st.session_state.prediction = st.session_state.bst.predict(input_df)[0]
+                st.session_state.predicted_class = dataset.target_names[st.session_state.prediction]
+                div[1].success(f"{st.session_state.predicted_class}")
+                st.session_state.probabilities = st.session_state.bst.predict_proba(pd.DataFrame([input_data]))[0]
+
+            if "probabilities" in st.session_state and "predicted_class" in st.session_state:
+                prob_df = pd.DataFrame({
+                    "Class": dataset.target_names,
+                    "Probability": st.session_state.probabilities
+                })
+                st.subheader("Prediction Probabilities")
+                prob_df["Predicted"] = prob_df["Class"] == st.session_state.predicted_class
+                fig = px.bar(prob_df, x="Class", y="Probability", color="Predicted")
+                st.plotly_chart(fig, key="prediction_probabilities")
     else:
         st.warning("Train the model to make predictions.")
                 

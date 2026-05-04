@@ -10,10 +10,30 @@ from sklearn.ensemble import BaggingClassifier
 from sklearn.datasets import load_iris, load_wine, load_breast_cancer, load_digits
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+from sklearn.preprocessing import LabelEncoder
 
 import plotly.express as px
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
+
+
+def validate_uploaded_csv(file):
+    """Returns (df, None) on success or (None, error_message) on failure."""
+    if not file.name.endswith(".csv"):
+        return None, "Only .csv files are accepted."
+    try:
+        df = pd.read_csv(file)
+    except Exception as e:
+        return None, f"Could not read file: {e}"
+    if df.empty:
+        return None, "The uploaded file appears to be empty."
+    if df.shape[1] < 2:
+        return None, "Dataset must have at least 2 columns (one target + at least one feature)."
+    non_numeric = df.select_dtypes(exclude="number").columns.tolist()
+    if non_numeric:
+        return None, f"Non-numeric columns detected: {non_numeric}. Please encode or remove them before uploading."
+    return df, None
+
 
 @st.cache_data
 def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_test, model_type="xgb"):
@@ -34,41 +54,94 @@ def train_with_estimators(max_depth, learning_rate, X_train, y_train, X_test, y_
     values_df = pd.DataFrame(values, index=["Accuracy", "F1-Score", "Precision", "Recall"]).T
     return values_df
 
+
 @st.cache_data
 def load_dataset(name):
-    """Loads dataset and returns a formatted DataFrame."""
-    # Map the selectbox strings directly to the sklearn functions
+    """Loads a built-in dataset and returns (df, class_names)."""
     loaders = {
         "Iris": load_iris,
         "Wine": load_wine,
         "Breast Cancer": load_breast_cancer,
         "Digits": load_digits,
     }
-    
-    # Execute the mapped function
     dataset = loaders[name]()
-    
     df = pd.DataFrame(dataset.data, columns=dataset.feature_names)
     df["target"] = dataset.target
-    return (df, dataset)
+    return (df, list(dataset.target_names))
+
+
+# --- Session state init ---
+
+if "uploaded_datasets" not in st.session_state:
+    st.session_state.uploaded_datasets = {}
 
 # --- Global Sidebar ---
 
+BUILTIN_DATASETS = ["Iris", "Wine", "Breast Cancer", "Digits"]
+uploaded_names = list(st.session_state.uploaded_datasets.keys())
+dataset_options = BUILTIN_DATASETS + uploaded_names
+
 selected_dataset = st.sidebar.selectbox(
     "Select dataset",
-    ["Iris", "Wine", "Breast Cancer", "Digits"]
+    dataset_options
 )
 
 if "last_dataset" not in st.session_state:
     st.session_state.last_dataset = selected_dataset
 
 if st.session_state.last_dataset != selected_dataset:
+    saved_uploads = st.session_state.uploaded_datasets
     for key in list(st.session_state.keys()):
         del st.session_state[key]
+    st.session_state.uploaded_datasets = saved_uploads
     st.session_state.last_dataset = selected_dataset
     st.cache_data.clear()
 
-df, dataset = load_dataset(selected_dataset)
+# --- Sidebar: CSV uploader ---
+
+st.sidebar.divider()
+st.sidebar.markdown("**Upload your own dataset**")
+uploaded_file = st.sidebar.file_uploader("Drop a CSV here", type=["csv"], label_visibility="collapsed")
+st.sidebar.caption("Accepted: .csv · numeric columns only")
+
+if uploaded_file is not None:
+    df_upload, error = validate_uploaded_csv(uploaded_file)
+    if error:
+        st.sidebar.error(error)
+    else:
+        target_col = st.sidebar.selectbox(
+            "Target column",
+            df_upload.columns.tolist(),
+            key="upload_target_col"
+        )
+        if st.sidebar.button("Add Dataset"):
+            if df_upload[target_col].nunique() < 2:
+                st.sidebar.error("Target column must contain at least 2 unique classes.")
+            else:
+                le = LabelEncoder()
+                feature_cols = [c for c in df_upload.columns if c != target_col]
+                df_normalized = df_upload[feature_cols].copy()
+                df_normalized["target"] = le.fit_transform(df_upload[target_col])
+                class_names = [str(c) for c in le.classes_]
+                st.session_state.uploaded_datasets[uploaded_file.name] = {
+                    "df": df_normalized,
+                    "feature_cols": feature_cols,
+                    "class_names": class_names,
+                }
+                st.rerun()
+
+st.sidebar.divider()
+
+# --- Load data ---
+
+is_uploaded = selected_dataset in st.session_state.uploaded_datasets
+
+if is_uploaded:
+    entry = st.session_state.uploaded_datasets[selected_dataset]
+    df = entry["df"]
+    class_names = entry["class_names"]
+else:
+    df, class_names = load_dataset(selected_dataset)
 
 n_estimators  = st.sidebar.slider("n_estimators", min_value=10, max_value=300, value=100)
 max_depth     = st.sidebar.slider("max_depth", min_value=1, max_value=10, value=3)
@@ -205,11 +278,10 @@ with theory:
 
 with training:
     st.subheader(f"{selected_dataset} Dataset")
-    
-    # df.shape[1] includes the target column, so we subtract 1 for the feature count
+
     n_samples = df.shape[0]
-    n_features = df.shape[1] - 1 
-    
+    n_features = df.shape[1] - 1
+
     st.write(f"{n_samples} samples, {n_features} features")
     st.dataframe(df)
 
@@ -265,8 +337,8 @@ with analysis:
 
         fig = ff.create_annotated_heatmap(
             z=cm,
-            x=list(dataset.target_names),
-            y=list(dataset.target_names),
+            x=class_names,
+            y=class_names,
             colorscale="Blues",
             showscale=True
         )
@@ -274,7 +346,7 @@ with analysis:
         st.plotly_chart(fig, key="confusion")
     else:
         st.warning("Train the model to see the confusion matrix.")
-    
+
     st.subheader("Performance vs n_estimators")
 
     if "bst" in st.session_state:
@@ -289,14 +361,14 @@ with analysis:
             )
             fig = px.line(values_df, x=values_df.index, y=["Accuracy", "F1-Score"], markers=True)
             fig.update_layout(
-                title="", 
-                xaxis_title="n_estimators", 
-                yaxis_title="Score", 
+                title="",
+                xaxis_title="n_estimators",
+                yaxis_title="Score",
                 )
             st.plotly_chart(fig, key="performance_n_estimators")
     else:
         st.warning("Train the model to see performance comparison.")
-            
+
 
 with compare:
     st.subheader("Compare with other models")
@@ -394,7 +466,7 @@ with predict:
                     if st.button("Select", key=f"digit_select_{i}", use_container_width=True):
                         input_df = st.session_state.X_test.iloc[[i]]
                         st.session_state.prediction = int(st.session_state.bst.predict(input_df)[0])
-                        st.session_state.predicted_class = str(dataset.target_names[st.session_state.prediction])
+                        st.session_state.predicted_class = class_names[st.session_state.prediction]
                         st.session_state.probabilities = st.session_state.bst.predict_proba(input_df)[0]
                         st.session_state.true_label = str(st.session_state.y_test.iloc[i])
 
@@ -405,7 +477,7 @@ with predict:
                 if "true_label" in st.session_state:
                     res_cols[1].metric("True Label", st.session_state.true_label)
                 prob_df = pd.DataFrame({
-                    "Class": [str(c) for c in dataset.target_names],
+                    "Class": class_names,
                     "Probability": st.session_state.probabilities
                 })
                 prob_df["Predicted"] = prob_df["Class"] == st.session_state.predicted_class
@@ -426,14 +498,14 @@ with predict:
             div = st.columns(2)
             if div[0].button("Predict"):
                 input_df = pd.DataFrame([input_data])
-                st.session_state.prediction = st.session_state.bst.predict(input_df)[0]
-                st.session_state.predicted_class = dataset.target_names[st.session_state.prediction]
+                st.session_state.prediction = int(st.session_state.bst.predict(input_df)[0])
+                st.session_state.predicted_class = class_names[st.session_state.prediction]
                 div[1].success(f"{st.session_state.predicted_class}")
                 st.session_state.probabilities = st.session_state.bst.predict_proba(pd.DataFrame([input_data]))[0]
 
             if "probabilities" in st.session_state and "predicted_class" in st.session_state:
                 prob_df = pd.DataFrame({
-                    "Class": dataset.target_names,
+                    "Class": class_names,
                     "Probability": st.session_state.probabilities
                 })
                 st.subheader("Prediction Probabilities")
@@ -442,4 +514,3 @@ with predict:
                 st.plotly_chart(fig, key="prediction_probabilities")
     else:
         st.warning("Train the model to make predictions.")
-                
